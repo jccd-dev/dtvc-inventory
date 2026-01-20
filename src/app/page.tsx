@@ -1,65 +1,1020 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState, useEffect } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Search, FileDown, Edit, RefreshCw, Loader2, Upload, CalendarIcon, ArrowUpDown, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { toast } from "sonner";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+import * as XLSX from 'xlsx';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Checkbox } from "@/components/ui/checkbox";
+
+// --- Types ---
+/**
+ * Represents an inventory item in the system.
+ */
+interface InventoryItem {
+  id: number;
+  itemName: string;
+  sellingPrice: number;
+  currentQuantity: number;
+  unitType: string;
+  expiryDate: string | null;
+  status: string;
+}
+
+/**
+ * Configuration for sorting the inventory table.
+ */
+type SortConfig = {
+  key: keyof InventoryItem;
+  direction: 'asc' | 'desc';
+} | null;
+
+// --- API Helper Functions ---
+
+/**
+ * Fetches inventory items from the API.
+ * Used by TanStack Query's useQuery.
+ *
+ * @param search - Search term for filtering by item name.
+ * @param status - Status filter (all, checked, updated, not yet).
+ * @returns Promise resolving to an array of InventoryItems.
+ */
+const fetchInventoryItems = async (search: string, status: string): Promise<InventoryItem[]> => {
+  const params = new URLSearchParams();
+  if (search) params.append('search', search);
+  if (status && status !== 'all') params.append('status', status);
+
+  const res = await fetch(`/api/inventory?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Server error: ${res.status}`);
+  }
+  return res.json();
+};
+
+/**
+ * Creates a new inventory item via API.
+ * Used by TanStack Query's useMutation.
+ *
+ * @param newItem - The item data to create.
+ * @returns Promise resolving to the created item.
+ */
+const createInventoryItem = async (newItem: Partial<InventoryItem>) => {
+  const res = await fetch('/api/inventory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(newItem),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json();
+    throw new Error(errorData.error || 'Failed to create item');
+  }
+  return res.json();
+};
+
+// --- Sub-Components ---
+
+/**
+ * Table cell component for editing quantity inline.
+ * It manages its own local state to allow typing, and commits the change on blur or Enter key.
+ */
+const QuantityCell = ({
+  currentQuantity,
+  onUpdate
+}: {
+  currentQuantity: number;
+  onUpdate: (quantity: number) => void;
+}) => {
+  const [value, setValue] = useState(currentQuantity.toString());
+
+  // Sync local state when prop changes (e.g., after successful API update)
+  useEffect(() => {
+    setValue(currentQuantity.toString());
+  }, [currentQuantity]);
+
+  const handleBlur = () => {
+    const newQty = parseInt(value);
+    if (!isNaN(newQty) && newQty !== currentQuantity) {
+      onUpdate(newQty);
+    } else {
+        // Revert if invalid or unchanged
+        setValue(currentQuantity.toString());
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <Input
+      className="w-20 h-8"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      type="number"
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+};
+
+/**
+ * Table cell component for editing expiry date inline.
+ * Uses a Popover and Calendar for date selection.
+ */
+const DateCell = ({
+  expiryDate,
+  onUpdate
+}: {
+  expiryDate: string | null;
+  onUpdate: (date: Date | null) => void;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn(
+            "w-full justify-start text-left font-normal h-8 px-2",
+            !expiryDate && "text-muted-foreground"
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {expiryDate ? format(new Date(expiryDate), "PPP") : <span>Pick a date</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={expiryDate ? new Date(expiryDate) : undefined}
+          defaultMonth={expiryDate ? new Date(expiryDate) : undefined}
+          captionLayout="dropdown"
+          startMonth={new Date(2020, 0)}
+          endMonth={new Date(2050, 12)}
+          onSelect={(date) => {
+            onUpdate(date || null);
+            setIsOpen(false);
+          }}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+      </PopoverContent>
+    </Popover>
+  );
+};
+
+// --- Main Page Component ---
+
+/**
+ * InventoryPage Component
+ *
+ * The main view for the Inventory Management application.
+ *
+ * Features:
+ * - Data Fetching: Uses TanStack Query for efficient server state management.
+ * - Filtering: Search by name and filter by status.
+ * - Sorting & Pagination: Client-side sorting and pagination for responsiveness.
+ * - CRUD Operations: Add, Edit (Inline & Modal), Delete (Single & Bulk).
+ * - Import/Export: Excel file support.
+ */
+export default function InventoryPage() {
+  const queryClient = useQueryClient();
+
+  // --- Local State ---
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [sortConfig, setSortConfig] = useState<SortConfig>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50;
+
+  // Selection State (for Bulk Actions)
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+
+  // Edit Modal State
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState<Partial<InventoryItem>>({});
+
+  // Add Modal State
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [addFormData, setAddFormData] = useState<Partial<InventoryItem>>({});
+
+  // Import Modal State
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  // Confirmation Dialog State (Generic for Delete actions)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    action: () => void;
+    isLoading?: boolean;
+  }>({ isOpen: false, title: '', description: '', action: () => {} });
+
+  // Calendar State (reused for both dialogs)
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+
+  // --- TanStack Query Hooks ---
+
+  /**
+   * useQuery hook to fetch inventory items.
+   * It automatically handles caching, refetching, and loading states.
+   * The queryKey includes dependencies (search, statusFilter) so it refetches when they change.
+   */
+  const { data: items = [], isLoading, refetch } = useQuery({
+    queryKey: ['inventory', search, statusFilter],
+    queryFn: () => fetchInventoryItems(search, statusFilter),
+  });
+
+  /**
+   * useMutation hook for adding a new item.
+   * On success, it invalidates the 'inventory' query to trigger a refetch.
+   */
+  const addItemMutation = useMutation({
+    mutationFn: createInventoryItem,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      toast.success('Item added successfully');
+      setIsAddDialogOpen(false);
+      setAddFormData({}); // Reset form
+    },
+    onError: (err: Error) => {
+      toast.error(`Error adding item: ${err.message}`);
+    },
+  });
+
+  // --- Handlers ---
+
+  const handleFileUpload = async () => {
+    if (!selectedFile) {
+      toast.warning('Please select a file first');
+      return;
+    }
+
+    setImporting(true);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await fetch('/api/inventory/import', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const json = JSON.parse(text);
+          throw new Error(json.error || 'Import failed');
+        } catch {
+          throw new Error(`Server error: ${res.status} ${res.statusText}`);
+        }
+      }
+
+      const data = await res.json();
+      toast.success(data.message);
+      setIsImportOpen(false);
+      setSelectedFile(null);
+      // Invalidate queries to refresh list
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+    } catch (error) {
+      toast.error('Import failed: ' + (error as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleEditClick = (item: InventoryItem) => {
+    setEditingItem(item);
+    setEditFormData({ ...item });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdate = async () => {
+    if (!editingItem) return;
+
+    try {
+      const res = await fetch(`/api/inventory/${editingItem.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editFormData)
+      });
+
+      if (!res.ok) {
+         throw new Error('Update failed');
+      }
+
+      toast.success('Item updated successfully');
+      setIsEditDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+    } catch {
+      toast.error('Failed to update item');
+    }
+  };
+
+  const handleQuickUpdate = async (item: InventoryItem, newQuantity: number) => {
+    try {
+      const res = await fetch(`/api/inventory/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...item,
+          currentQuantity: newQuantity
+        })
+      });
+
+      if (!res.ok) {
+         throw new Error('Update failed');
+      }
+
+      toast.success('Quantity updated');
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+    } catch {
+      toast.error('Failed to update quantity');
+    }
+  };
+
+  const handleQuickDateUpdate = async (item: InventoryItem, newDate: Date | null) => {
+    try {
+      const res = await fetch(`/api/inventory/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...item,
+          expiryDate: newDate ? newDate.toISOString() : null
+        })
+      });
+
+      if (!res.ok) {
+         throw new Error('Update failed');
+      }
+
+      toast.success('Expiry date updated');
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+    } catch {
+      toast.error('Failed to update expiry date');
+    }
+  };
+
+  const handleAddSubmit = () => {
+    // Basic client-side validation
+    if (!addFormData.itemName || !addFormData.sellingPrice || !addFormData.currentQuantity) {
+      toast.warning('Please fill in all required fields (Name, Price, Quantity)');
+      return;
+    }
+    addItemMutation.mutate(addFormData);
+  };
+
+  // Helper for inputs in Edit Form
+  const handleEditInputChange = (field: keyof InventoryItem, value: string | number | null) => {
+    setEditFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  // Helper for inputs in Add Form
+  const handleAddInputChange = (field: keyof InventoryItem, value: string | number | null) => {
+    setAddFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  // --- Delete Logic ---
+
+  /**
+   * Toggles selection for a single item.
+   */
+  const toggleSelection = (id: number) => {
+    const newSelection = new Set(selectedItems);
+    if (newSelection.has(id)) {
+      newSelection.delete(id);
+    } else {
+      newSelection.add(id);
+    }
+    setSelectedItems(newSelection);
+  };
+
+  /**
+   * Toggles selection for all items on the current page.
+   */
+  const toggleAll = (paginatedItems: InventoryItem[]) => {
+    if (selectedItems.size === paginatedItems.length && paginatedItems.length > 0) {
+      setSelectedItems(new Set());
+    } else {
+      const newSelection = new Set<number>();
+      paginatedItems.forEach(item => newSelection.add(item.id));
+      setSelectedItems(newSelection);
+    }
+  };
+
+  /**
+   * Initiates the deletion process for a single item.
+   */
+  const initiateDelete = (item: InventoryItem) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Item',
+      description: `Are you sure you want to delete "${item.itemName}"? This action cannot be undone.`,
+      action: () => handleDelete(item.id)
+    });
+  };
+
+  /**
+   * Performs the API call to delete a single item.
+   */
+  const handleDelete = async (id: number) => {
+    setConfirmDialog(prev => ({ ...prev, isLoading: true }));
+    try {
+      const res = await fetch(`/api/inventory/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!res.ok) throw new Error('Delete failed');
+
+      toast.success('Item deleted successfully');
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+
+      // Remove from selection if present
+      const newSelection = new Set(selectedItems);
+      newSelection.delete(id);
+      setSelectedItems(newSelection);
+    } catch {
+      toast.error('Failed to delete item');
+    } finally {
+      setConfirmDialog(prev => ({ ...prev, isOpen: false, isLoading: false }));
+    }
+  };
+
+  /**
+   * Initiates the bulk deletion process.
+   */
+  const initiateBulkDelete = () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Selected Items',
+      description: `Are you sure you want to delete ${selectedItems.size} items? This action cannot be undone.`,
+      action: () => handleBulkDelete()
+    });
+  };
+
+  /**
+   * Performs the API call to delete multiple items.
+   */
+  const handleBulkDelete = async () => {
+    setConfirmDialog(prev => ({ ...prev, isLoading: true }));
+    try {
+      const res = await fetch('/api/inventory', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedItems) })
+      });
+
+      if (!res.ok) throw new Error('Bulk delete failed');
+
+      const data = await res.json();
+      toast.success(data.message);
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      setSelectedItems(new Set());
+    } catch {
+      toast.error('Failed to delete items');
+    } finally {
+      setConfirmDialog(prev => ({ ...prev, isOpen: false, isLoading: false }));
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'checked':
+        return 'bg-amber-500 hover:bg-amber-600 border-transparent text-white';
+      case 'updated':
+        return 'bg-emerald-500 hover:bg-emerald-600 border-transparent text-white';
+      case 'not yet':
+      default:
+        return 'bg-red-600 hover:bg-red-700 border-transparent text-white';
+    }
+  };
+
+  const handleSort = (key: keyof InventoryItem) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  // --- Client-side Processing (Sort & Pagination) ---
+  // Note: We are sorting/paginating the data returned from the server on the client side
+  // because the dataset is relatively small. For large datasets, move this to server.
+
+  const sortedItems = [...items].sort((a, b) => {
+    if (!sortConfig) return 0;
+
+    const aValue = a[sortConfig.key];
+    const bValue = b[sortConfig.key];
+
+    if (aValue === bValue) return 0;
+    if (aValue === null) return 1;
+    if (bValue === null) return -1;
+
+    if (sortConfig.direction === 'asc') {
+      return aValue < bValue ? -1 : 1;
+    } else {
+      return aValue > bValue ? -1 : 1;
+    }
+  });
+
+  const totalPages = Math.ceil(sortedItems.length / itemsPerPage);
+  const paginatedItems = sortedItems.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  const handleExport = () => {
+    try {
+      const exportData = sortedItems.map(item => ({
+        'Item Name': item.itemName,
+        'Selling Price': item.sellingPrice,
+        'Current Quantity': item.currentQuantity,
+        'Unit Type': item.unitType,
+        'Expiry Date': item.expiryDate ? new Date(item.expiryDate).toLocaleDateString() : '',
+        'Status': item.status
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+
+      const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+      XLSX.writeFile(wb, `Inventory_export_${dateStr}.xlsx`);
+
+      toast.success('Export completed successfully');
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to export data');
+    }
+  };
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-2xl font-bold">Inventory Management</CardTitle>
+          <div className="flex gap-2">
+            {selectedItems.size > 0 && (
+              <Button onClick={initiateBulkDelete} variant="destructive">
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Selected ({selectedItems.size})
+              </Button>
+            )}
+            <Button onClick={() => setIsAddDialogOpen(true)} className="bg-blue-600 hover:bg-blue-700">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Item
+            </Button>
+            <Button variant="outline" onClick={handleExport} disabled={items.length === 0}>
+              <FileDown className="mr-2 h-4 w-4" />
+              Export Excel
+            </Button>
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button onClick={() => setIsImportOpen(true)}>
+              <FileDown className="mr-2 h-4 w-4" />
+              Import from Excel
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <div className="flex-1 relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search items..."
+                className="pl-8"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="w-full md:w-[200px]">
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="checked">Checked</SelectItem>
+                  <SelectItem value="updated">Updated</SelectItem>
+                  <SelectItem value="not yet">Not Yet</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="mb-4 text-sm text-muted-foreground">
+            Showing {sortedItems.length} items
+          </div>
+
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[50px]">
+                    <Checkbox
+                      checked={
+                        paginatedItems.length > 0 &&
+                        paginatedItems.every(item => selectedItems.has(item.id))
+                      }
+                      onCheckedChange={() => toggleAll(paginatedItems)}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('itemName')}>
+                    Item Name {sortConfig?.key === 'itemName' && <ArrowUpDown className="inline h-4 w-4" />}
+                  </TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('sellingPrice')}>
+                    Selling Price {sortConfig?.key === 'sellingPrice' && <ArrowUpDown className="inline h-4 w-4" />}
+                  </TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('currentQuantity')}>
+                    Current Qty {sortConfig?.key === 'currentQuantity' && <ArrowUpDown className="inline h-4 w-4" />}
+                  </TableHead>
+                  <TableHead>Unit Type</TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('expiryDate')}>
+                    Expiry Date {sortConfig?.key === 'expiryDate' && <ArrowUpDown className="inline h-4 w-4" />}
+                  </TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('status')}>
+                    Status {sortConfig?.key === 'status' && <ArrowUpDown className="inline h-4 w-4" />}
+                  </TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                   <TableRow>
+                   <TableCell colSpan={9} className="text-center py-8">
+                     <Loader2 className="h-6 w-6 animate-spin mx-auto" />
+                     <span className="sr-only">Loading...</span>
+                   </TableCell>
+                 </TableRow>
+                ) : sortedItems.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center py-8">
+                      No items found. Try importing data or adding a new item.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedItems.map((item) => (
+                    <TableRow key={item.id} data-state={selectedItems.has(item.id) ? "selected" : undefined}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedItems.has(item.id)}
+                          onCheckedChange={() => toggleSelection(item.id)}
+                          aria-label={`Select ${item.itemName}`}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium">{item.itemName}</TableCell>
+                      <TableCell>{item.sellingPrice}</TableCell>
+                      <TableCell>
+                        <QuantityCell
+                          currentQuantity={item.currentQuantity}
+                          onUpdate={(newQty) => handleQuickUpdate(item, newQty)}
+                        />
+                      </TableCell>
+                      <TableCell>{item.unitType}</TableCell>
+                      <TableCell>
+                        <DateCell
+                          expiryDate={item.expiryDate}
+                          onUpdate={(newDate) => handleQuickDateUpdate(item, newDate)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(item.status)}>
+                          {item.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => handleEditClick(item)}>
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => initiateDelete(item)}>
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-end space-x-2 py-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <div className="text-sm text-muted-foreground">
+              Page {currentPage} of {totalPages || 1}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages || totalPages === 0}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Confirmation Dialog */}
+      <Dialog open={confirmDialog.isOpen} onOpenChange={(open) => !open && setConfirmDialog(prev => ({ ...prev, isOpen: false }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{confirmDialog.title}</DialogTitle>
+            <DialogDescription>
+              {confirmDialog.description}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDialog.action} disabled={confirmDialog.isLoading}>
+              {confirmDialog.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit Inventory Item</DialogTitle>
+            <DialogDescription>
+              Make changes to the inventory item here. Click save when you&apos;re done.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            {/* Item Name */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-name" className="text-right">Item Name</Label>
+              <Input
+                id="edit-name"
+                value={editFormData.itemName || ''}
+                onChange={(e) => handleEditInputChange('itemName', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Price */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-price" className="text-right">Price</Label>
+              <Input
+                id="edit-price"
+                type="number"
+                value={editFormData.sellingPrice || 0}
+                onChange={(e) => handleEditInputChange('sellingPrice', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Current Qty */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-current" className="text-right">Current Qty</Label>
+              <Input
+                id="edit-current"
+                type="number"
+                value={editFormData.currentQuantity || 0}
+                onChange={(e) => handleEditInputChange('currentQuantity', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Unit Type */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-unit" className="text-right">Unit Type</Label>
+              <Input
+                id="edit-unit"
+                value={editFormData.unitType || ''}
+                onChange={(e) => handleEditInputChange('unitType', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Expiry Date */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label className="text-right">Expiry Date</Label>
+              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={"outline"}
+                    className={cn(
+                      "col-span-3 justify-start text-left font-normal",
+                      !editFormData.expiryDate && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {editFormData.expiryDate ? format(new Date(editFormData.expiryDate), "PPP") : <span>Pick a date</span>}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={editFormData.expiryDate ? new Date(editFormData.expiryDate) : undefined}
+                    defaultMonth={editFormData.expiryDate ? new Date(editFormData.expiryDate) : undefined}
+                    captionLayout="dropdown"
+                    startMonth={new Date(2020, 0)}
+                    endMonth={new Date(2050, 12)}
+                    onSelect={(date) => {
+                      handleEditInputChange('expiryDate', date ? date.toISOString() : null);
+                      setIsCalendarOpen(false);
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+            {/* Status */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-status" className="text-right">Status</Label>
+              <Select
+                value={editFormData.status?.toLowerCase()}
+                onValueChange={(val) => handleEditInputChange('status', val)}
+              >
+                <SelectTrigger className="col-span-3">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="checked">Checked</SelectItem>
+                  <SelectItem value="updated">Updated</SelectItem>
+                  <SelectItem value="not yet">Not Yet</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" onClick={handleUpdate}>Save changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Dialog */}
+      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add New Inventory Item</DialogTitle>
+            <DialogDescription>
+              Fill in the details for the new inventory item.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            {/* Item Name */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="add-name" className="text-right">Item Name</Label>
+              <Input
+                id="add-name"
+                value={addFormData.itemName || ''}
+                onChange={(e) => handleAddInputChange('itemName', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Price */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="add-price" className="text-right">Price</Label>
+              <Input
+                id="add-price"
+                type="number"
+                value={addFormData.sellingPrice || ''}
+                onChange={(e) => handleAddInputChange('sellingPrice', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Current Qty */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="add-current" className="text-right">Current Qty</Label>
+              <Input
+                id="add-current"
+                type="number"
+                value={addFormData.currentQuantity || ''}
+                onChange={(e) => handleAddInputChange('currentQuantity', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Unit Type */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="add-unit" className="text-right">Unit Type</Label>
+              <Input
+                id="add-unit"
+                value={addFormData.unitType || ''}
+                onChange={(e) => handleAddInputChange('unitType', e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            {/* Expiry Date */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label className="text-right">Expiry Date</Label>
+              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={"outline"}
+                    className={cn(
+                      "col-span-3 justify-start text-left font-normal",
+                      !addFormData.expiryDate && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {addFormData.expiryDate ? format(new Date(addFormData.expiryDate), "PPP") : <span>Pick a date</span>}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={addFormData.expiryDate ? new Date(addFormData.expiryDate) : undefined}
+                    defaultMonth={addFormData.expiryDate ? new Date(addFormData.expiryDate) : undefined}
+                    captionLayout="dropdown"
+                    startMonth={new Date(2020, 0)}
+                    endMonth={new Date(2050, 12)}
+                    onSelect={(date) => {
+                      handleAddInputChange('expiryDate', date ? date.toISOString() : null);
+                      setIsCalendarOpen(false);
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+            {/* Status */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="add-status" className="text-right">Status</Label>
+              <Select
+                value={addFormData.status?.toLowerCase() || 'not yet'}
+                onValueChange={(val) => handleAddInputChange('status', val)}
+              >
+                <SelectTrigger className="col-span-3">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="checked">Checked</SelectItem>
+                  <SelectItem value="updated">Updated</SelectItem>
+                  <SelectItem value="not yet">Not Yet</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" onClick={handleAddSubmit} disabled={addItemMutation.isPending}>
+              {addItemMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Add Item
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Dialog */}
+      <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Import Inventory</DialogTitle>
+            <DialogDescription>
+              Select an Excel file (.xlsx) to import inventory items.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid w-full max-w-sm items-center gap-1.5">
+              <Label htmlFor="file">Excel File</Label>
+              <Input
+                id="file"
+                type="file"
+                accept=".xlsx, .xls"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsImportOpen(false)}>Cancel</Button>
+            <Button onClick={handleFileUpload} disabled={importing || !selectedFile}>
+              {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+              Import
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
