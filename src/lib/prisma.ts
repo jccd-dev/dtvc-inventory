@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
+import { PrismaPg } from '@prisma/adapter-pg'
+import { Pool } from 'pg'
 
 /**
  * Prisma Client Instantiation
@@ -10,16 +11,13 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
  * In development, Next.js's "fast refresh" can re-import files, potentially creating multiple
  * database connections. This can lead to connection limit errors.
  * Storing the client in `globalThis` ensures we reuse the same instance across reloads.
- *
- * Why Driver Adapter?
- * We are using `better-sqlite3` as a driver adapter for Prisma to support serverless/edge environments
- * more efficiently and because it's a synchronous, faster SQLite driver for Node.js.
  */
 
 const prismaClientSingleton = () => {
-  const adapter = new PrismaBetterSqlite3({
-    url: process.env.DATABASE_URL ?? 'file:./dev.db',
-  })
+  const connectionString = process.env.DATABASE_URL
+  const pool = new Pool({ connectionString })
+  const adapter = new PrismaPg(pool)
+
   return new PrismaClient({ adapter })
 }
 

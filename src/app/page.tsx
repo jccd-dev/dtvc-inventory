@@ -209,7 +209,8 @@ export default function InventoryPage() {
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [editFormData, setEditFormData] = useState<Partial<InventoryItem>>({});
+  // Change type to allow empty string for inputs
+  const [editFormData, setEditFormData] = useState<Partial<Omit<InventoryItem, 'currentQuantity'> & { currentQuantity: number | string | null }>>({});
 
   // Add Modal State
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -385,7 +386,13 @@ export default function InventoryPage() {
 
   // Helper for inputs in Edit Form
   const handleEditInputChange = (field: keyof InventoryItem, value: string | number | null) => {
-    setEditFormData(prev => ({ ...prev, [field]: value }));
+    // Cast value to match the state type manually to avoid 'any'
+    setEditFormData(prev => {
+      if (field === 'currentQuantity') {
+        return { ...prev, [field]: value };
+      }
+      return { ...prev, [field]: value };
+    });
   };
 
   // Helper for inputs in Add Form
@@ -801,13 +808,40 @@ export default function InventoryPage() {
             {/* Current Qty */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="edit-current" className="text-right">Current Qty</Label>
-              <Input
-                id="edit-current"
-                type="number"
-                value={editFormData.currentQuantity || 0}
-                onChange={(e) => handleEditInputChange('currentQuantity', e.target.value)}
-                className="col-span-3"
-              />
+              <div className="col-span-3 flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="px-3"
+                  onClick={() => {
+                    const current = Number(editFormData.currentQuantity || 0);
+                    handleEditInputChange('currentQuantity', Math.max(0, current - 1));
+                  }}
+                >
+                  -
+                </Button>
+                <Input
+                  id="edit-current"
+                  type="number"
+                  value={editFormData.currentQuantity === undefined || editFormData.currentQuantity === null ? '' : editFormData.currentQuantity}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    handleEditInputChange('currentQuantity', val === '' ? '' : parseInt(val));
+                  }}
+                  className="text-center"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="px-3"
+                  onClick={() => {
+                    const current = Number(editFormData.currentQuantity || 0);
+                    handleEditInputChange('currentQuantity', current + 1);
+                  }}
+                >
+                  +
+                </Button>
+              </div>
             </div>
             {/* Unit Type */}
             <div className="grid grid-cols-4 items-center gap-4">
