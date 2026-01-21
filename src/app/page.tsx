@@ -592,6 +592,8 @@ export default function InventoryPage() {
 
   const getStatusColor = (status: string) => {
     switch (status?.toLowerCase()) {
+      case 'new':
+        return 'bg-violet-600 hover:bg-violet-700 border-transparent text-white';
       case 'checked':
         return 'bg-amber-500 hover:bg-amber-600 border-transparent text-white';
       case 'updated':
@@ -721,6 +723,7 @@ export default function InventoryPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="new">New</SelectItem>
                   <SelectItem value="checked">Checked</SelectItem>
                   <SelectItem value="updated">Updated</SelectItem>
                   <SelectItem value="not yet">Not Yet</SelectItem>
@@ -1003,6 +1006,7 @@ export default function InventoryPage() {
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="new">New</SelectItem>
                   <SelectItem value="checked">Checked</SelectItem>
                   <SelectItem value="updated">Updated</SelectItem>
                   <SelectItem value="not yet">Not Yet</SelectItem>
@@ -1123,6 +1127,7 @@ export default function InventoryPage() {
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="new">New</SelectItem>
                   <SelectItem value="checked">Checked</SelectItem>
                   <SelectItem value="updated">Updated</SelectItem>
                   <SelectItem value="not yet">Not Yet</SelectItem>
