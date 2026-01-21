@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -74,13 +74,8 @@ const getUnitTypeOptions = (currentValue: unknown): Array<{ value: string; label
  * @param status - Status filter (all, checked, updated, not yet).
  * @returns Promise resolving to an array of InventoryItems.
  */
-const fetchInventoryItems = async (search: string, status: string): Promise<InventoryItem[]> => {
-  const params = new URLSearchParams();
-  const trimmedSearch = search.trim();
-  if (trimmedSearch) params.append('search', trimmedSearch);
-  if (status && status !== 'all') params.append('status', status);
-
-  const res = await fetch(`/api/inventory?${params.toString()}`);
+const fetchInventoryItems = async (): Promise<InventoryItem[]> => {
+  const res = await fetch('/api/inventory');
   if (!res.ok) {
     throw new Error(`Server error: ${res.status}`);
   }
@@ -281,12 +276,25 @@ export default function InventoryPage() {
    * The queryKey includes dependencies (search, statusFilter) so it refetches when they change.
    */
   const { data: items = [], isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['inventory', debouncedSearch, statusFilter],
-    queryFn: () => fetchInventoryItems(debouncedSearch, statusFilter),
+    queryKey: ['inventory'],
+    queryFn: fetchInventoryItems,
     placeholderData: (previousData) => previousData,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
   });
+
+  const filteredItems = useMemo(() => {
+    const normalizedSearch = debouncedSearch.trim().toLowerCase();
+    return items.filter((item) => {
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        item.itemName.toLowerCase().includes(normalizedSearch);
+      const matchesStatus =
+        statusFilter === 'all' ||
+        item.status.toLowerCase() === statusFilter.toLowerCase();
+      return matchesSearch && matchesStatus;
+    });
+  }, [debouncedSearch, items, statusFilter]);
 
   /**
    * useMutation hook for adding a new item.
@@ -352,24 +360,54 @@ export default function InventoryPage() {
     setIsEditDialogOpen(true);
   };
 
+  const updateCachedItem = useCallback(
+    (updated: InventoryItem) => {
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((it) => (it.id === updated.id ? updated : it));
+      });
+    },
+    [queryClient]
+  );
+
+  const removeCachedItems = useCallback(
+    (ids: Set<number>) => {
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.filter((it) => !ids.has(it.id));
+      });
+    },
+    [queryClient]
+  );
+
   const handleUpdate = async () => {
     if (!editingItem) return;
 
     try {
       setIsUpdatingItem(true);
+      const payload = {
+        ...editingItem,
+        ...editFormData,
+        sellingPrice: Number(editFormData.sellingPrice ?? editingItem.sellingPrice),
+        currentQuantity: Number(editFormData.currentQuantity ?? editingItem.currentQuantity),
+        unitType: String(editFormData.unitType ?? editingItem.unitType ?? ''),
+        itemName: String(editFormData.itemName ?? editingItem.itemName ?? ''),
+        status: String(editFormData.status ?? editingItem.status ?? 'not yet')
+      };
       const res = await fetch(`/api/inventory/${editingItem.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editFormData)
+        body: JSON.stringify(payload)
       });
 
       if (!res.ok) {
          throw new Error('Update failed');
       }
 
+      const updated = (await res.json()) as InventoryItem;
+      updateCachedItem(updated);
       toast.success('Item updated successfully');
       setIsEditDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
     } catch {
       toast.error('Failed to update item');
     } finally {
@@ -392,8 +430,9 @@ export default function InventoryPage() {
          throw new Error('Update failed');
       }
 
+      const updated = (await res.json()) as InventoryItem;
+      updateCachedItem(updated);
       toast.success('Quantity updated');
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
     } catch {
       toast.error('Failed to update quantity');
     }
@@ -414,8 +453,9 @@ export default function InventoryPage() {
          throw new Error('Update failed');
       }
 
+      const updated = (await res.json()) as InventoryItem;
+      updateCachedItem(updated);
       toast.success('Expiry date updated');
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
     } catch {
       toast.error('Failed to update expiry date');
     }
@@ -499,7 +539,7 @@ export default function InventoryPage() {
       if (!res.ok) throw new Error('Delete failed');
 
       toast.success('Item deleted successfully');
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      removeCachedItems(new Set([id]));
 
       // Remove from selection if present
       const newSelection = new Set(selectedItems);
@@ -530,17 +570,18 @@ export default function InventoryPage() {
   const handleBulkDelete = async () => {
     setConfirmDialog(prev => ({ ...prev, isLoading: true }));
     try {
+      const ids = Array.from(selectedItems);
       const res = await fetch('/api/inventory', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedItems) })
+        body: JSON.stringify({ ids })
       });
 
       if (!res.ok) throw new Error('Bulk delete failed');
 
       const data = await res.json();
       toast.success(data.message);
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      removeCachedItems(new Set(ids));
       setSelectedItems(new Set());
     } catch {
       toast.error('Failed to delete items');
@@ -561,42 +602,49 @@ export default function InventoryPage() {
     }
   };
 
-  const handleSort = (key: keyof InventoryItem) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
-    setSortConfig({ key, direction });
-  };
+  const handleSort = useCallback((key: keyof InventoryItem) => {
+    setSortConfig((prev) => {
+      const direction: 'asc' | 'desc' =
+        prev && prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc';
+      return { key, direction };
+    });
+  }, []);
 
   // --- Client-side Processing (Sort & Pagination) ---
   // Note: We are sorting/paginating the data returned from the server on the client side
   // because the dataset is relatively small. For large datasets, move this to server.
 
-  const sortedItems = [...items].sort((a, b) => {
-    if (!sortConfig) return 0;
+  const sortedItems = useMemo(() => {
+    if (!sortConfig) return filteredItems;
+    const copy = [...filteredItems];
+    copy.sort((a, b) => {
+      const aValue = a[sortConfig.key];
+      const bValue = b[sortConfig.key];
 
-    const aValue = a[sortConfig.key];
-    const bValue = b[sortConfig.key];
+      if (aValue === bValue) return 0;
+      if (aValue === null) return 1;
+      if (bValue === null) return -1;
 
-    if (aValue === bValue) return 0;
-    if (aValue === null) return 1;
-    if (bValue === null) return -1;
-
-    if (sortConfig.direction === 'asc') {
-      return aValue < bValue ? -1 : 1;
-    } else {
+      if (sortConfig.direction === 'asc') {
+        return aValue < bValue ? -1 : 1;
+      }
       return aValue > bValue ? -1 : 1;
-    }
-  });
+    });
+    return copy;
+  }, [filteredItems, sortConfig]);
 
-  const totalPages = Math.ceil(sortedItems.length / itemsPerPage);
-  const paginatedItems = sortedItems.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+  const totalPages = useMemo(() => Math.ceil(sortedItems.length / itemsPerPage), [sortedItems.length, itemsPerPage]);
+
+  const paginatedItems = useMemo(
+    () =>
+      sortedItems.slice(
+        (currentPage - 1) * itemsPerPage,
+        currentPage * itemsPerPage
+      ),
+    [currentPage, itemsPerPage, sortedItems]
   );
 
-  const handleExport = () => {
+  const handleExport = useCallback(() => {
     try {
       const exportData = sortedItems.map(item => ({
         'Item Name': item.itemName,
@@ -619,7 +667,7 @@ export default function InventoryPage() {
       console.error(error);
       toast.error('Failed to export data');
     }
-  };
+  }, [sortedItems]);
 
   return (
     <div className="container mx-auto py-8 px-4">
