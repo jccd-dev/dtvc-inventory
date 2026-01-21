@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
 
 /**
  * GET method to fetch inventory items with optional search and status filtering.
- * 
+ *
  * @param request - The incoming HTTP request with query parameters.
  * @returns JSON response containing the list of inventory items.
  */
@@ -14,11 +13,12 @@ export async function GET(request: Request) {
   const status = searchParams.get('status');
 
   // Build the WHERE clause based on filters
-  const where: Prisma.InventoryItemWhereInput = {};
+  const where: { itemName?: { contains: string; mode: 'insensitive' }; status?: string } = {};
 
   if (search) {
     where.itemName = {
-      contains: search
+      contains: search,
+      mode: 'insensitive'
     };
   }
 
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
 /**
  * POST method to create a new inventory item.
  * Expects a JSON body with item details.
- * 
+ *
  * @param request - The incoming HTTP request.
  * @returns JSON response with the newly created item.
  */
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
 /**
  * DELETE method for bulk deletion of inventory items.
  * Expects a JSON body with an array of IDs: { ids: number[] }
- * 
+ *
  * @param request - The incoming HTTP request.
  * @returns JSON response with the count of deleted items.
  */

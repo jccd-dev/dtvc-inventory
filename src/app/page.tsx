@@ -53,7 +53,8 @@ type SortConfig = {
  */
 const fetchInventoryItems = async (search: string, status: string): Promise<InventoryItem[]> => {
   const params = new URLSearchParams();
-  if (search) params.append('search', search);
+  const trimmedSearch = search.trim();
+  if (trimmedSearch) params.append('search', trimmedSearch);
   if (status && status !== 'all') params.append('status', status);
 
   const res = await fetch(`/api/inventory?${params.toString()}`);
@@ -198,6 +199,7 @@ export default function InventoryPage() {
 
   // --- Local State ---
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortConfig, setSortConfig] = useState<SortConfig>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -235,14 +237,31 @@ export default function InventoryPage() {
 
   // --- TanStack Query Hooks ---
 
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [search]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, statusFilter]);
+
   /**
    * useQuery hook to fetch inventory items.
    * It automatically handles caching, refetching, and loading states.
    * The queryKey includes dependencies (search, statusFilter) so it refetches when they change.
    */
-  const { data: items = [], isLoading, refetch } = useQuery({
-    queryKey: ['inventory', search, statusFilter],
-    queryFn: () => fetchInventoryItems(search, statusFilter),
+  const { data: items = [], isLoading, isFetching, refetch } = useQuery({
+    queryKey: ['inventory', debouncedSearch, statusFilter],
+    queryFn: () => fetchInventoryItems(debouncedSearch, statusFilter),
+    placeholderData: (previousData) => previousData,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
 
   /**
@@ -595,8 +614,8 @@ export default function InventoryPage() {
               <FileDown className="mr-2 h-4 w-4" />
               Export Excel
             </Button>
-            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
             <Button onClick={() => setIsImportOpen(true)}>
