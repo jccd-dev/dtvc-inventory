@@ -41,6 +41,29 @@ type SortConfig = {
   direction: 'asc' | 'desc';
 } | null;
 
+const UNIT_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'pcs', label: 'pcs (pieces)' },
+  { value: 'kg', label: 'kg (kilogram)' },
+  { value: 'g', label: 'g (gram)' },
+  { value: 'mg', label: 'mg (milligram)' },
+  { value: 'l', label: 'l (liter)' },
+  { value: 'ml', label: 'ml (milliliter)' },
+  { value: 'bot', label: 'bot (bottle)' },
+  { value: 'tabs', label: 'tabs (tablets)' },
+  { value: 'cap', label: 'cap (capsules)' },
+  { value: 'box', label: 'box' },
+  { value: 'pack', label: 'pack' },
+  { value: 'sachet', label: 'sachet' },
+  { value: 'vial', label: 'vial' }
+];
+
+const getUnitTypeOptions = (currentValue: unknown): Array<{ value: string; label: string }> => {
+  const current = typeof currentValue === 'string' ? currentValue.trim() : '';
+  const hasCustom = current.length > 0 && !UNIT_TYPE_OPTIONS.some((opt) => opt.value === current);
+  if (!hasCustom) return UNIT_TYPE_OPTIONS;
+  return [{ value: current, label: current }, ...UNIT_TYPE_OPTIONS];
+};
+
 // --- API Helper Functions ---
 
 /**
@@ -211,6 +234,7 @@ export default function InventoryPage() {
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isUpdatingItem, setIsUpdatingItem] = useState(false);
   // Change type to allow empty string for inputs
   const [editFormData, setEditFormData] = useState<Partial<Omit<InventoryItem, 'currentQuantity'> & { currentQuantity: number | string | null }>>({});
 
@@ -332,6 +356,7 @@ export default function InventoryPage() {
     if (!editingItem) return;
 
     try {
+      setIsUpdatingItem(true);
       const res = await fetch(`/api/inventory/${editingItem.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -347,6 +372,8 @@ export default function InventoryPage() {
       queryClient.invalidateQueries({ queryKey: ['inventory'] });
     } catch {
       toast.error('Failed to update item');
+    } finally {
+      setIsUpdatingItem(false);
     }
   };
 
@@ -610,7 +637,11 @@ export default function InventoryPage() {
               <Plus className="mr-2 h-4 w-4" />
               Add Item
             </Button>
-            <Button variant="outline" onClick={handleExport} disabled={items.length === 0}>
+            <Button
+              onClick={handleExport}
+              disabled={items.length === 0}
+              className="bg-green-600 text-white hover:bg-green-700"
+            >
               <FileDown className="mr-2 h-4 w-4" />
               Export Excel
             </Button>
@@ -865,12 +896,21 @@ export default function InventoryPage() {
             {/* Unit Type */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="edit-unit" className="text-right">Unit Type</Label>
-              <Input
-                id="edit-unit"
-                value={editFormData.unitType || ''}
-                onChange={(e) => handleEditInputChange('unitType', e.target.value)}
-                className="col-span-3"
-              />
+              <Select
+                value={typeof editFormData.unitType === 'string' && editFormData.unitType.length > 0 ? editFormData.unitType : undefined}
+                onValueChange={(val) => handleEditInputChange('unitType', val)}
+              >
+                <SelectTrigger className="col-span-3">
+                  <SelectValue placeholder="Select unit type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {getUnitTypeOptions(editFormData.unitType).map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             {/* Expiry Date */}
             <div className="grid grid-cols-4 items-center gap-4">
@@ -923,7 +963,10 @@ export default function InventoryPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" onClick={handleUpdate}>Save changes</Button>
+            <Button type="submit" onClick={handleUpdate} disabled={isUpdatingItem}>
+              {isUpdatingItem && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save changes
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -973,12 +1016,21 @@ export default function InventoryPage() {
             {/* Unit Type */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="add-unit" className="text-right">Unit Type</Label>
-              <Input
-                id="add-unit"
-                value={addFormData.unitType || ''}
-                onChange={(e) => handleAddInputChange('unitType', e.target.value)}
-                className="col-span-3"
-              />
+              <Select
+                value={typeof addFormData.unitType === 'string' && addFormData.unitType.length > 0 ? addFormData.unitType : undefined}
+                onValueChange={(val) => handleAddInputChange('unitType', val)}
+              >
+                <SelectTrigger className="col-span-3">
+                  <SelectValue placeholder="Select unit type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {UNIT_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             {/* Expiry Date */}
             <div className="grid grid-cols-4 items-center gap-4">
