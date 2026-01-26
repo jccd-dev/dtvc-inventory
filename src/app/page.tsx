@@ -1,13 +1,12 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Search, FileDown, Edit, RefreshCw, Loader2, Upload, CalendarIcon, ArrowUpDown, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { toast } from "sonner";
@@ -55,6 +54,13 @@ const UNIT_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'pack', label: 'pack' },
   { value: 'sachet', label: 'sachet' },
   { value: 'vial', label: 'vial' }
+];
+
+const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'new', label: 'New' },
+  { value: 'checked', label: 'Checked' },
+  { value: 'updated', label: 'Updated' },
+  { value: 'not yet', label: 'Not Yet' }
 ];
 
 const getUnitTypeOptions = (currentValue: unknown): Array<{ value: string; label: string }> => {
@@ -109,12 +115,14 @@ const createInventoryItem = async (newItem: Partial<InventoryItem>) => {
  * Table cell component for editing quantity inline.
  * It manages its own local state to allow typing, and commits the change on blur or Enter key.
  */
-const QuantityCell = ({
+const QuantityCell = memo(({
+  itemId,
   currentQuantity,
   onUpdate
 }: {
+  itemId: number;
   currentQuantity: number;
-  onUpdate: (quantity: number) => void;
+  onUpdate: (itemId: number, quantity: number) => void;
 }) => {
   const [value, setValue] = useState(currentQuantity.toString());
 
@@ -124,17 +132,24 @@ const QuantityCell = ({
   }, [currentQuantity]);
 
   const handleBlur = () => {
-    const newQty = parseInt(value);
-    if (!isNaN(newQty) && newQty !== currentQuantity) {
-      onUpdate(newQty);
-    } else {
-        // Revert if invalid or unchanged
-        setValue(currentQuantity.toString());
+    if (value.trim() === '') {
+      setValue(currentQuantity.toString());
+      return;
     }
+    const newQty = parseInt(value, 10);
+    if (!isNaN(newQty) && newQty !== currentQuantity) {
+      onUpdate(itemId, newQty);
+      return;
+    }
+    setValue(currentQuantity.toString());
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      e.currentTarget.blur();
+    }
+    if (e.key === 'Escape') {
+      setValue(currentQuantity.toString());
       e.currentTarget.blur();
     }
   };
@@ -147,56 +162,12 @@ const QuantityCell = ({
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
       type="number"
+      min={0}
       onClick={(e) => e.stopPropagation()}
     />
   );
-};
-
-/**
- * Table cell component for editing expiry date inline.
- * Uses a Popover and Calendar for date selection.
- */
-const DateCell = ({
-  expiryDate,
-  onUpdate
-}: {
-  expiryDate: string | null;
-  onUpdate: (date: Date | null) => void;
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-
-  return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-start text-left font-normal h-8 px-2",
-            !expiryDate && "text-muted-foreground"
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {expiryDate ? format(new Date(expiryDate), "PPP") : <span>Pick a date</span>}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <Calendar
-          mode="single"
-          selected={expiryDate ? new Date(expiryDate) : undefined}
-          defaultMonth={expiryDate ? new Date(expiryDate) : undefined}
-          captionLayout="dropdown"
-          startMonth={new Date(2020, 0)}
-          endMonth={new Date(2050, 12)}
-          onSelect={(date) => {
-            onUpdate(date || null);
-            setIsOpen(false);
-          }}
-        />
-      </PopoverContent>
-    </Popover>
-  );
-};
+});
+QuantityCell.displayName = 'QuantityCell';
 
 // --- Main Page Component ---
 
@@ -225,6 +196,8 @@ export default function InventoryPage() {
 
   // Selection State (for Bulk Actions)
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [isBulkStatusUpdating, setIsBulkStatusUpdating] = useState(false);
 
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
@@ -295,6 +268,8 @@ export default function InventoryPage() {
       return matchesSearch && matchesStatus;
     });
   }, [debouncedSearch, items, statusFilter]);
+
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
 
   /**
    * useMutation hook for adding a new item.
@@ -415,51 +390,99 @@ export default function InventoryPage() {
     }
   };
 
-  const handleQuickUpdate = async (item: InventoryItem, newQuantity: number) => {
-    try {
-      const res = await fetch(`/api/inventory/${item.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...item,
-          currentQuantity: newQuantity
-        })
-      });
+  const handleQuickUpdate = useCallback(
+    async (itemId: number, newQuantity: number) => {
+      const item = itemsById.get(itemId);
+      if (!item) return;
+      try {
+        const res = await fetch(`/api/inventory/${item.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...item,
+            currentQuantity: newQuantity
+          })
+        });
 
-      if (!res.ok) {
-         throw new Error('Update failed');
+        if (!res.ok) {
+           throw new Error('Update failed');
+        }
+
+        const updated = (await res.json()) as InventoryItem;
+        updateCachedItem(updated);
+        toast.success('Quantity updated');
+      } catch {
+        toast.error('Failed to update quantity');
       }
+    },
+    [itemsById, updateCachedItem]
+  );
 
-      const updated = (await res.json()) as InventoryItem;
-      updateCachedItem(updated);
-      toast.success('Quantity updated');
-    } catch {
-      toast.error('Failed to update quantity');
-    }
-  };
+  const handleQuickStatusUpdate = useCallback(
+    async (itemId: number, newStatus: string) => {
+      const item = itemsById.get(itemId);
+      if (!item || item.status.toLowerCase() === newStatus.toLowerCase()) return;
+      try {
+        const res = await fetch(`/api/inventory/${item.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...item,
+            status: newStatus
+          })
+        });
 
-  const handleQuickDateUpdate = async (item: InventoryItem, newDate: Date | null) => {
-    try {
-      const res = await fetch(`/api/inventory/${item.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...item,
-          expiryDate: newDate ? newDate.toISOString() : null
-        })
-      });
+        if (!res.ok) {
+           throw new Error('Update failed');
+        }
 
-      if (!res.ok) {
-         throw new Error('Update failed');
+        const updated = (await res.json()) as InventoryItem;
+        updateCachedItem(updated);
+        toast.success('Status updated');
+      } catch {
+        toast.error('Failed to update status');
       }
+    },
+    [itemsById, updateCachedItem]
+  );
 
-      const updated = (await res.json()) as InventoryItem;
-      updateCachedItem(updated);
-      toast.success('Expiry date updated');
-    } catch {
-      toast.error('Failed to update expiry date');
+  const handleBulkStatusUpdate = useCallback(async () => {
+    if (!bulkStatus) {
+      toast.warning('Select a status first');
+      return;
     }
-  };
+    if (selectedItems.size === 0) return;
+    setIsBulkStatusUpdating(true);
+    const ids = Array.from(selectedItems);
+    try {
+      const responses = await Promise.all(
+        ids.map(async (id) => {
+          const item = itemsById.get(id);
+          if (!item) return null;
+          const res = await fetch(`/api/inventory/${item.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...item,
+              status: bulkStatus
+            })
+          });
+          if (!res.ok) throw new Error('Bulk update failed');
+          return res.json() as Promise<InventoryItem>;
+        })
+      );
+      responses.filter(Boolean).forEach((updated) => {
+        if (updated) updateCachedItem(updated);
+      });
+      toast.success('Status updated for selected items');
+      setSelectedItems(new Set());
+      setBulkStatus('');
+    } catch {
+      toast.error('Failed to update selected items');
+    } finally {
+      setIsBulkStatusUpdating(false);
+    }
+  }, [bulkStatus, itemsById, selectedItems, updateCachedItem]);
 
   const handleAddSubmit = () => {
     // Basic client-side validation
@@ -606,10 +629,23 @@ export default function InventoryPage() {
 
   const handleSort = useCallback((key: keyof InventoryItem) => {
     setSortConfig((prev) => {
-      const direction: 'asc' | 'desc' =
-        prev && prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc';
-      return { key, direction };
+      if (!prev || prev.key !== key) {
+        return { key, direction: 'asc' };
+      }
+      if (prev.direction === 'asc') {
+        return { key, direction: 'desc' };
+      }
+      return null;
     });
+  }, []);
+
+  const handleCopyName = useCallback(async (name: string) => {
+    try {
+      await navigator.clipboard.writeText(name);
+      toast.success('Copied to clipboard');
+    } catch {
+      toast.error('Failed to copy');
+    }
   }, []);
 
   // --- Client-side Processing (Sort & Pagination) ---
@@ -678,10 +714,28 @@ export default function InventoryPage() {
           <CardTitle className="text-2xl font-bold">Inventory Management</CardTitle>
           <div className="flex gap-2">
             {selectedItems.size > 0 && (
-              <Button onClick={initiateBulkDelete} variant="destructive">
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete Selected ({selectedItems.size})
-              </Button>
+              <>
+                <Button onClick={initiateBulkDelete} variant="destructive">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Selected ({selectedItems.size})
+                </Button>
+                <Select value={bulkStatus} onValueChange={setBulkStatus}>
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue placeholder="Bulk status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button onClick={handleBulkStatusUpdate} disabled={isBulkStatusUpdating || !bulkStatus}>
+                  {isBulkStatusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Apply Status
+                </Button>
+              </>
             )}
             <Button onClick={() => setIsAddDialogOpen(true)} className="bg-blue-600 hover:bg-blue-700">
               <Plus className="mr-2 h-4 w-4" />
@@ -723,10 +777,11 @@ export default function InventoryPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="new">New</SelectItem>
-                  <SelectItem value="checked">Checked</SelectItem>
-                  <SelectItem value="updated">Updated</SelectItem>
-                  <SelectItem value="not yet">Not Yet</SelectItem>
+                  {STATUS_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -793,25 +848,40 @@ export default function InventoryPage() {
                           aria-label={`Select ${item.itemName}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{item.itemName}</TableCell>
+                      <TableCell
+                        className="font-medium"
+                        onDoubleClick={() => handleCopyName(item.itemName)}
+                      >
+                        {item.itemName}
+                      </TableCell>
                       <TableCell>{item.sellingPrice}</TableCell>
                       <TableCell>
                         <QuantityCell
+                          itemId={item.id}
                           currentQuantity={item.currentQuantity}
-                          onUpdate={(newQty) => handleQuickUpdate(item, newQty)}
+                          onUpdate={handleQuickUpdate}
                         />
                       </TableCell>
                       <TableCell>{item.unitType}</TableCell>
                       <TableCell>
-                        <DateCell
-                          expiryDate={item.expiryDate}
-                          onUpdate={(newDate) => handleQuickDateUpdate(item, newDate)}
-                        />
+                        {item.expiryDate ? format(new Date(item.expiryDate), "PPP") : '-'}
                       </TableCell>
                       <TableCell>
-                        <Badge className={getStatusColor(item.status)}>
-                          {item.status}
-                        </Badge>
+                        <Select
+                          value={item.status.toLowerCase()}
+                          onValueChange={(val) => handleQuickStatusUpdate(item.id, val)}
+                        >
+                          <SelectTrigger className={cn("h-8 w-[130px] justify-center", getStatusColor(item.status))}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STATUS_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -1006,10 +1076,11 @@ export default function InventoryPage() {
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="new">New</SelectItem>
-                  <SelectItem value="checked">Checked</SelectItem>
-                  <SelectItem value="updated">Updated</SelectItem>
-                  <SelectItem value="not yet">Not Yet</SelectItem>
+                  {STATUS_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1127,10 +1198,11 @@ export default function InventoryPage() {
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="new">New</SelectItem>
-                  <SelectItem value="checked">Checked</SelectItem>
-                  <SelectItem value="updated">Updated</SelectItem>
-                  <SelectItem value="not yet">Not Yet</SelectItem>
+                  {STATUS_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
