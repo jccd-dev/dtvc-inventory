@@ -190,6 +190,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [quantityFilter, setQuantityFilter] = useState('all');
   const [sortConfig, setSortConfig] = useState<SortConfig>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
@@ -241,7 +242,7 @@ export default function InventoryPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, statusFilter]);
+  }, [debouncedSearch, statusFilter, quantityFilter]);
 
   /**
    * useQuery hook to fetch inventory items.
@@ -265,9 +266,12 @@ export default function InventoryPage() {
       const matchesStatus =
         statusFilter === 'all' ||
         item.status.toLowerCase() === statusFilter.toLowerCase();
-      return matchesSearch && matchesStatus;
+      const matchesQuantity =
+        quantityFilter === 'all' ||
+        (quantityFilter === 'zero' ? item.currentQuantity === 0 : item.currentQuantity > 0);
+      return matchesSearch && matchesStatus && matchesQuantity;
     });
-  }, [debouncedSearch, items, statusFilter]);
+  }, [debouncedSearch, items, statusFilter, quantityFilter]);
 
   const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
 
@@ -782,6 +786,18 @@ export default function InventoryPage() {
                       {opt.label}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-full md:w-[200px]">
+              <Select value={quantityFilter} onValueChange={setQuantityFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Filter by quantity" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Quantities</SelectItem>
+                  <SelectItem value="zero">Zero Quantity</SelectItem>
+                  <SelectItem value="nonzero">Non-zero Quantity</SelectItem>
                 </SelectContent>
               </Select>
             </div>
